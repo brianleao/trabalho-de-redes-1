@@ -1,0 +1,15 @@
+{
+  "name": "udp-file-transfer",
+  "version": "1.0.0",
+  "scripts": {
+    "server": "ts-node src/server/index.ts",
+    "server:slow": "ts-node src/server/index.ts -- --send-delay-ms=20",
+    "client": "ts-node src/client/index.ts",
+    "generate-files": "ts-node src/generate-test-files.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  }
+}
