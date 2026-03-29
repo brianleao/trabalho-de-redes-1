@@ -1,6 +1,6 @@
 import path from "path";
 
-export const SERVER_PORT = 41234;
+export const SERVER_PORT = 3000;
 export const SEGMENT_SIZE = 1400;
 export const CONNECTION_TIMEOUT_MS = 5000;
 export const RETRANSMIT_TIMEOUT_MS = 3000;
