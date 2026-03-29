@@ -11,7 +11,7 @@ function parseArgs() {
 
   if (args.length === 0) {
     console.error("Usage: npm run client -- <IP>:<PORT>/<filename> [--loss-rate=<0-1>] [--drop=<seq1,seq2,...>]");
-    console.error("Example: npm run client -- 127.0.0.1:41234/largefile.bin --loss-rate=0.1 --drop=3,7,12");
+    console.error("Example: npm run client -- 127.0.0.1:3000/largefile.bin --loss-rate=0.1 --drop=3,7,12");
     process.exit(1);
   }
 
