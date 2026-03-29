@@ -32,11 +32,7 @@ function parseArgs() {
     if (arg.startsWith("--loss-rate=")) {
       lossRate = parseFloat(arg.split("=")[1]);
     } else if (arg.startsWith("--drop=")) {
-      arg
-        .split("=")[1]
-        .split(",")
-        .map(Number)
-        .forEach((n) => forcedDrops.add(n));
+      arg.split("=")[1].split(",").map(Number).forEach((n) => forcedDrops.add(n));
     }
   }
 
@@ -63,16 +59,15 @@ function main() {
   let expectedFileHash = "";
   let receivedFilename = "";
   let metadataReceived = false;
-  let retransmitTimer: NodeJS.Timeout | null = null;
   let retransmitAttempts = 0;
+  let retransmitTimer: NodeJS.Timeout | null = null;
 
   function shouldDropSegment(seqNum: number): boolean {
     if (forcedDrops.has(seqNum)) {
       forcedDrops.delete(seqNum);
       return true;
     }
-    if (lossRate > 0 && Math.random() < lossRate) return true;
-    return false;
+    return lossRate > 0 && Math.random() < lossRate;
   }
 
   function getMissingSegments(): number[] {
@@ -139,62 +134,65 @@ function main() {
     socket.close();
   }
 
+  function handleMetadata(totalSegs: number, fileHash: string, fname: string, fileSize: bigint): void {
+    totalSegments = totalSegs;
+    expectedFileHash = fileHash;
+    receivedFilename = fname;
+    metadataReceived = true;
+    console.log(`Transfer info: "${fname}" — ${fileSize} bytes, ${totalSegs} segments`);
+    scheduleRetransmitTimeout();
+  }
+
+  function handleData(seqNum: number, segmentHash: string, data: Buffer): void {
+    if (!metadataReceived) return;
+
+    if (shouldDropSegment(seqNum)) {
+      console.log(`\n[DROP] Segment ${seqNum} discarded (loss simulation)`);
+      return;
+    }
+
+    if (!verifyMd5(data, segmentHash)) {
+      console.warn(`\n[CORRUPT] Segment ${seqNum} failed integrity check — will request retransmit`);
+      return;
+    }
+
+    if (!receivedSegments.has(seqNum)) {
+      receivedSegments.set(seqNum, data);
+      retransmitAttempts = 0;
+    }
+
+    process.stdout.write(`\rProgress: ${receivedSegments.size}/${totalSegments} segments received`);
+  }
+
+  function handleFin(): void {
+    const missing = getMissingSegments();
+    if (missing.length === 0) {
+      assembleAndSave();
+    } else {
+      console.log(`\nFIN received — missing ${missing.length} segment(s).`);
+      requestRetransmit(missing);
+      scheduleRetransmitTimeout();
+    }
+  }
+
   socket.on("message", (buf) => {
     try {
       const message = decodePacket(buf);
 
       switch (message.type) {
-        case MessageType.ERROR: {
+        case MessageType.ERROR:
           console.error(`\nServer error: ${message.message}`);
           socket.close();
           break;
-        }
-
-        case MessageType.METADATA: {
-          totalSegments = message.totalSegments;
-          expectedFileHash = message.fileHash;
-          receivedFilename = message.filename;
-          metadataReceived = true;
-          console.log(
-            `Transfer info: "${message.filename}" — ${message.fileSize} bytes, ${totalSegments} segments`
-          );
-          scheduleRetransmitTimeout();
+        case MessageType.METADATA:
+          handleMetadata(message.totalSegments, message.fileHash, message.filename, message.fileSize);
           break;
-        }
-
-        case MessageType.DATA: {
-          if (!metadataReceived) break;
-
-          if (shouldDropSegment(message.seqNum)) {
-            console.log(`\n[DROP] Segment ${message.seqNum} discarded (loss simulation)`);
-            break;
-          }
-
-          if (!verifyMd5(message.data, message.segmentHash)) {
-            console.warn(`\n[CORRUPT] Segment ${message.seqNum} failed integrity check — will request retransmit`);
-            break;
-          }
-
-          if (!receivedSegments.has(message.seqNum)) {
-            receivedSegments.set(message.seqNum, message.data);
-            retransmitAttempts = 0;
-          }
-
-          process.stdout.write(`\rProgress: ${receivedSegments.size}/${totalSegments} segments received`);
+        case MessageType.DATA:
+          handleData(message.seqNum, message.segmentHash, message.data);
           break;
-        }
-
-        case MessageType.FIN: {
-          const missing = getMissingSegments();
-          if (missing.length === 0) {
-            assembleAndSave();
-          } else {
-            console.log(`\nFIN received — missing ${missing.length} segment(s).`);
-            requestRetransmit(missing);
-            scheduleRetransmitTimeout();
-          }
+        case MessageType.FIN:
+          handleFin();
           break;
-        }
       }
     } catch (err) {
       console.error(`Failed to decode packet: ${err}`);

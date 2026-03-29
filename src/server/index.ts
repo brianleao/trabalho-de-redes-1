@@ -21,6 +21,12 @@ const sendDelayMs = (() => {
 const socket = dgram.createSocket("udp4");
 const activeTransfers = new Map<string, ClientTransfer>();
 
+const BATCH_SIZE = 64;
+
+function clientKey(address: string, port: number): string {
+  return `${address}:${port}`;
+}
+
 function sendPacket(packet: Buffer, port: number, address: string): void {
   socket.send(packet, port, address);
 }
@@ -30,17 +36,15 @@ function sendError(errorCode: ErrorCode, message: string, port: number, address:
   sendPacket(packet, port, address);
 }
 
-const BATCH_SIZE = 64;
-
-async function sendSegments(clientKey: string, port: number, address: string, seqNums: number[]): Promise<void> {
-  const transfer = activeTransfers.get(clientKey);
+async function sendSegments(key: string, port: number, address: string, seqNums: number[]): Promise<void> {
+  const transfer = activeTransfers.get(key);
   if (!transfer) return;
 
   for (let i = 0; i < seqNums.length; i++) {
     const seqNum = seqNums[i];
     const start = seqNum * SEGMENT_SIZE;
     const end = Math.min(start + SEGMENT_SIZE, transfer.fileData.length);
-    const segmentData = transfer.fileData.slice(start, end);
+    const segmentData = transfer.fileData.subarray(start, end);
 
     const packet = encodePacket({
       type: MessageType.DATA,
@@ -69,15 +73,15 @@ async function sendSegments(clientKey: string, port: number, address: string, se
   });
   sendPacket(finPacket, port, address);
 
-  console.log(`[${clientKey}] Sent ${seqNums.length} segment(s) + FIN`);
+  console.log(`[${key}] Sent ${seqNums.length} segment(s) + FIN`);
 }
 
 function handleRequest(filename: string, port: number, address: string): void {
-  const clientKey = `${address}:${port}`;
+  const key = clientKey(address, port);
   const filePath = path.join(FILES_DIR, filename);
 
   if (!fs.existsSync(filePath)) {
-    console.log(`[${clientKey}] File not found: ${filename}`);
+    console.log(`[${key}] File not found: ${filename}`);
     sendError(ErrorCode.FILE_NOT_FOUND, `File not found: ${filename}`, port, address);
     return;
   }
@@ -86,11 +90,9 @@ function handleRequest(filename: string, port: number, address: string): void {
   const fileHash = md5(fileData);
   const totalSegments = Math.ceil(fileData.length / SEGMENT_SIZE);
 
-  activeTransfers.set(clientKey, { filename, fileData, totalSegments, fileHash });
+  activeTransfers.set(key, { filename, fileData, totalSegments, fileHash });
 
-  console.log(
-    `[${clientKey}] Transfer started: "${filename}" — ${fileData.length} bytes, ${totalSegments} segments`
-  );
+  console.log(`[${key}] Transfer started: "${filename}" — ${fileData.length} bytes, ${totalSegments} segments`);
 
   const metadataPacket = encodePacket({
     type: MessageType.METADATA,
@@ -102,30 +104,29 @@ function handleRequest(filename: string, port: number, address: string): void {
   sendPacket(metadataPacket, port, address);
 
   const allSegments = Array.from({ length: totalSegments }, (_, i) => i);
-  sendSegments(clientKey, port, address, allSegments);
+  sendSegments(key, port, address, allSegments);
 }
 
 function handleRetransmit(segments: number[], port: number, address: string): void {
-  const clientKey = `${address}:${port}`;
-  console.log(`[${clientKey}] Retransmit request for segments: [${segments.join(", ")}]`);
-  sendSegments(clientKey, port, address, segments);
+  const key = clientKey(address, port);
+  console.log(`[${key}] Retransmit request for segments: [${segments.join(", ")}]`);
+  sendSegments(key, port, address, segments);
 }
 
 socket.on("message", (buf, remoteInfo) => {
   const { address, port } = remoteInfo;
-  const clientKey = `${address}:${port}`;
 
   try {
     const message = decodePacket(buf);
 
     if (message.type === MessageType.REQUEST) {
-      console.log(`[${clientKey}] REQUEST "${message.filename}"`);
+      console.log(`[${clientKey(address, port)}] REQUEST "${message.filename}"`);
       handleRequest(message.filename, port, address);
     } else if (message.type === MessageType.RETRANSMIT) {
       handleRetransmit(message.segments, port, address);
     }
   } catch (err) {
-    console.error(`[${clientKey}] Failed to decode packet: ${err}`);
+    console.error(`[${clientKey(address, port)}] Failed to decode packet: ${err}`);
   }
 });
 
